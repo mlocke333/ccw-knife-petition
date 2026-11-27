@@ -1,0 +1,29 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "ccw-knife-petition",
+  "main": "src/index.js",
+  "compatibility_date": "2026-11-27",
+  "compatibility_flags": ["nodejs_compat"],
+  "upload_source_maps": true,
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "workers_dev": true,
+  "routes": [
+    { "pattern": "ccwknife.ldcybersystems.com", "custom_domain": true }
+  ],
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ccw-knife-petition",
+      "database_id": "c245b975-bea2-48c6-8beb-cfe84d8422ba",
+      "migrations_dir": "./migrations"
+    }
+  ]
+}
