@@ -2,14 +2,14 @@
 
 Grassroots signature page for a limited California CCW exception for automatic knives.
 
-The page is the Cloudflare Worker `ccw-knife-petition` at https://ccwknife.ldcybersystems.com/. The form posts to `/api/sign` on that Worker. Each signature is encrypted with AES-256-GCM before it is written to the D1 database `ccw-knife-petition`. The database stores the ciphertext, a random IV, and an HMAC of the email so the same address cannot sign twice. Names, emails, cities, and comments are not stored in plaintext.
+The page is the Cloudflare Worker `ccw-knife-petition` at https://ccwknife.ldcybersystems.com/. The form posts to `/api/sign` on that Worker. Each signature is a row in the D1 database `ccw-knife-petition`. Cloudflare encrypts that database at rest.
 
-`ENCRYPTION_KEY` and `ADMIN_TOKEN` are Worker secrets. Local copies live in `.dev.vars`, which is not committed. Losing both the Worker secret and that file makes stored signatures unreadable.
+Read the signatures in the Cloudflare dashboard:
 
-To download decrypted signatures:
+https://dash.cloudflare.com/333c045b18d7189ea99fba8df9143717/workers/d1/databases/c245b975-bea2-48c6-8beb-cfe84d8422ba
 
-```bash
-node scripts/export-signatures.mjs
+```sql
+SELECT created_at, name, email, city, county, zip, ccw_holder, comment
+FROM signatures
+ORDER BY created_at;
 ```
-
-That writes `signatures.json` in this directory. The file is gitignored.

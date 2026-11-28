@@ -35,10 +35,6 @@ async function route(request, env) {
     if (request.method !== "POST") return text("Method not allowed", 405);
     return sign(request, env);
   }
-  if (url.pathname === "/api/export") {
-    if (request.method !== "GET") return text("Method not allowed", 405);
-    return exportSignatures(request, env);
-  }
   if (url.pathname.startsWith("/api/")) return text("Not found", 404);
   return env.ASSETS.fetch(request);
 }
@@ -64,10 +60,9 @@ async function sign(request, env) {
   const parsed = parseSignature(form);
   if (parsed.error) return page(parsed.error, 400);
 
-  const keyBytes = decodeKey(env.ENCRYPTION_KEY);
   const now = new Date();
   const createdAt = now.toISOString();
-  const ipHash = await hmacHex(keyBytes, request.headers.get("CF-Connecting-IP") || "unknown");
+  const ipHash = await sha256Hex(request.headers.get("CF-Connecting-IP") || "unknown");
   const windowStart = new Date(now.getTime() - RATE_WINDOW_MS).toISOString();
 
   await env.DB.prepare("DELETE FROM submit_log WHERE created_at < ?")
@@ -81,18 +76,29 @@ async function sign(request, env) {
     return page("Too many signatures from this network. Please try again later.", 429);
   }
 
-  const emailHash = await hmacHex(keyBytes, parsed.value.email);
-  const existing = await env.DB.prepare(
-    "SELECT id FROM signatures WHERE email_hash = ?",
-  ).bind(emailHash).first();
+  const signature = parsed.value;
+  const existing = await env.DB.prepare("SELECT id FROM signatures WHERE email = ?")
+    .bind(signature.email)
+    .first();
   if (existing) return Response.redirect(new URL("/already", request.url), 303);
 
-  const sealed = await encryptJson(keyBytes, parsed.value);
   const id = crypto.randomUUID();
   try {
     await env.DB.prepare(
-      "INSERT INTO signatures (id, created_at, email_hash, iv, payload) VALUES (?, ?, ?, ?, ?)",
-    ).bind(id, createdAt, emailHash, sealed.iv, sealed.payload).run();
+      `INSERT INTO signatures
+        (id, created_at, name, email, city, county, zip, ccw_holder, comment)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(
+      id,
+      createdAt,
+      signature.name,
+      signature.email,
+      signature.city,
+      signature.county,
+      signature.zip,
+      signature.ccw_holder,
+      signature.comment,
+    ).run();
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     if (message.includes("UNIQUE")) {
@@ -107,30 +113,6 @@ async function sign(request, env) {
 
   console.log(JSON.stringify({ message: "signature stored", id }));
   return Response.redirect(new URL("/thanks", request.url), 303);
-}
-
-async function exportSignatures(request, env) {
-  const header = request.headers.get("Authorization") || "";
-  const presented = header.startsWith("Bearer ") ? header.slice(7) : "";
-  if (!env.ADMIN_TOKEN || !timingSafeEqual(presented, env.ADMIN_TOKEN)) {
-    return text("Unauthorized", 401);
-  }
-
-  const keyBytes = decodeKey(env.ENCRYPTION_KEY);
-  const rows = await env.DB.prepare(
-    "SELECT id, created_at, iv, payload FROM signatures ORDER BY created_at ASC",
-  ).all();
-
-  const signatures = [];
-  for (const row of rows.results || []) {
-    const fields = await decryptJson(keyBytes, row.iv, row.payload);
-    signatures.push({ id: row.id, created_at: row.created_at, ...fields });
-  }
-
-  return Response.json(
-    { count: signatures.length, signatures },
-    { headers: { "Cache-Control": "no-store" } },
-  );
 }
 
 function parseSignature(form) {
@@ -166,63 +148,9 @@ function sameOrigin(request) {
   }
 }
 
-function decodeKey(secret) {
-  const bytes = b64ToBytes(secret || "");
-  if (bytes.byteLength !== 32) throw new Error("encryption key is not 32 bytes");
-  return bytes;
-}
-
-async function encryptJson(keyBytes, value) {
-  const key = await crypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, ["encrypt"]);
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const cipher = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv },
-    key,
-    new TextEncoder().encode(JSON.stringify(value)),
-  );
-  return { iv: bytesToB64(iv), payload: bytesToB64(new Uint8Array(cipher)) };
-}
-
-async function decryptJson(keyBytes, iv, payload) {
-  const key = await crypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, ["decrypt"]);
-  const plain = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: b64ToBytes(iv) },
-    key,
-    b64ToBytes(payload),
-  );
-  return JSON.parse(new TextDecoder().decode(plain));
-}
-
-async function hmacHex(keyBytes, text) {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    keyBytes,
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(text));
-  return [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-function timingSafeEqual(left, right) {
-  const a = new TextEncoder().encode(left);
-  const b = new TextEncoder().encode(right);
-  if (a.byteLength !== b.byteLength || a.byteLength === 0) return false;
-  return crypto.subtle.timingSafeEqual(a, b);
-}
-
-function bytesToB64(bytes) {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
-}
-
-function b64ToBytes(value) {
-  const binary = atob(value);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
+async function sha256Hex(text) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function page(message, status) {
